@@ -222,9 +222,11 @@ def _scale_to_sampwidth(data, sampwidth, vmin, vmax):
         if outmin != vmin or outmax != vmax:
             vmin = float(vmin)
             vmax = float(vmax)
-            data = (float(outmax - outmin) * (data - vmin) /
-                    (vmax - vmin)).astype(_np.int64) + outmin
-            data[data == outmax] = outmax - 1
+            normalization_ratio = outmax / np.max(np.abs(data))
+            data = normalization_ratio * data
+            # data = (float(outmax - outmin) * (data - vmin) /
+            #         (vmax - vmin)).astype(_np.int64) + outmin
+            # data[data == outmax] = outmax - 1
         data = data.astype(dt)
 
     return data
