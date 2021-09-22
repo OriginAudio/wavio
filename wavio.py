@@ -222,13 +222,8 @@ def _scale_to_sampwidth(data, sampwidth, vmin, vmax):
         if outmin != vmin or outmax != vmax:
             vmin = float(vmin)
             vmax = float(vmax)
-            # START MODIFICATIONS TO CODE
-            # ADJUSTED SCALING PROCEDURE TO FIX DC BIAS
-            abs = _np.abs(data)
-            dmax = _np.max(abs)
-            normalization_ratio = outmax / dmax
-            data = normalization_ratio * data
-            # END MODIFICATIONS TO CODE
+            data = (float(outmax - outmin) * (data - vmin) /
+                    (vmax - vmin)).astype(_np.int64) + outmin
             data[data == outmax] = outmax - 1
         data = data.astype(dt)
 
@@ -300,19 +295,19 @@ def write(file, data, rate, scale=None, sampwidth=None):
         The string "dtype-limits" is not allowed when the `data` is a
         floating point array.
 
+                If `scale` is the string "normalize", then data is normalized to
+        the full range of the output format while avoiding a DC offset
+        introduced by the default behavior (i.e. for asymmetric signals
+        zero value stays at zero).
         If using `scale` results in values that exceed the limits of the
         output sample width, the data is clipped.  For example, the
         following code::
-
             >>> x = np.array([-100, 0, 100, 200, 300, 325])
             >>> wavio.write('foo.wav', x, 8000, scale='none', sampwidth=1)
-
         will write the values [0, 0, 100, 200, 255, 255] to the file.
-
     Example
     -------
     Create a 3 second 440 Hz sine wave, and save it in a 24-bit WAV file.
-
     >>> import numpy as np
     >>> import wavio
     >>> rate = 22050  # samples per second
@@ -321,33 +316,25 @@ def write(file, data, rate, scale=None, sampwidth=None):
     >>> t = np.linspace(0, T, T*rate, endpoint=False)
     >>> x = np.sin(2*np.pi * f * t)
     >>> wavio.write("sine24.wav", x, rate, sampwidth=3)
-
     Create a file that contains the 16 bit integer values -10000 and 10000
     repeated 100 times.  Don't automatically scale the values.  Use a sample
     rate 8000.
-
     >>> x = np.empty(200, dtype=np.int16)
     >>> x[::2] = -10000
     >>> x[1::2] = 10000
     >>> wavio.write("foo.wav", x, 8000, scale='none')
-
     Check that the file contains what we expect.
-
     >>> w = wavio.read("foo.wav")
     >>> np.all(w.data[:, 0] == x)
     True
-
     In the following, the values -10000 and 10000 (from within the 16 bit
     range [-2**15, 2**15-1]) are mapped to the corresponding values 88 and
     168 (in the range [0, 2**8-1]).
-
     >>> wavio.write("foo.wav", x, 8000, sampwidth=1, scale='dtype-limits')
     >>> w = wavio.read("foo.wav")
     >>> w.data[:4, 0]
     array([ 88, 168,  88, 168], dtype=uint8)
-
     """
-
     if sampwidth is None:
         if not _np.issubdtype(data.dtype, _np.integer) or data.itemsize > 4:
             raise ValueError('when data.dtype is not an 8-, 16-, or 32-bit '
@@ -356,10 +343,8 @@ def write(file, data, rate, scale=None, sampwidth=None):
     else:
         if sampwidth not in [1, 2, 3, 4]:
             raise ValueError('sampwidth must be 1, 2, 3 or 4.')
-
     outdtype = _sampwidth_dtypes[sampwidth]
     outmin, outmax = _sampwidth_ranges[sampwidth]
-
     if scale == "none":
         data = data.clip(outmin, outmax-1).astype(outdtype)
     elif scale == "dtype-limits":
@@ -380,6 +365,11 @@ def write(file, data, rate, scale=None, sampwidth=None):
             vmin = ii.min
             vmax = ii.max
             data = _scale_to_sampwidth(data, sampwidth, vmin, vmax)
+    elif scale == "normalize":
+        analog_zero = (outmin + outmax) / 2
+        centered_data = data - analog_zero
+        halfrange = max(abs(centered_data.min()), abs(centered_data.max()))
+        data = _scale_to_sampwidth(data, sampwidth, vmin=analog_zero - halfrange, vmax=analog_zero + halfrange)
     else:
         if scale is None:
             vmin = data.min()
@@ -391,9 +381,7 @@ def write(file, data, rate, scale=None, sampwidth=None):
                 vmin = data.min()
             if vmax is None:
                 vmax = data.max()
-
         data = _scale_to_sampwidth(data, sampwidth, vmin, vmax)
-
     # At this point, `data` has been converted to have one of the following:
     #    sampwidth   dtype
     #    ---------   -----
@@ -403,12 +391,9 @@ def write(file, data, rate, scale=None, sampwidth=None):
     #        4       int32
     # The values in `data` are in the form in which they will be saved;
     # no more scaling will take place.
-
     if data.ndim == 1:
         data = data.reshape(-1, 1)
-
     wavdata = _array2wav(data, sampwidth)
-
     w = _wave.open(file, 'wb')
     w.setnchannels(data.shape[1])
     w.setsampwidth(sampwidth)
